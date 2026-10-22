@@ -57,22 +57,22 @@ export class QueryPlanner {
     const locSuffix = location ? ` ${location}` : '';
 
     searchVariants.push(
-      `${techPrefix}software engineer intern fresh graduate stipend${locSuffix} 2026`.trim()
+      `${techPrefix}software engineer intern fresh graduate stipend${locSuffix} ${year}`.trim()
     );
 
-    // 2. Careers portal / application link specific query
+    // 2. Official ATS and career portal targets
     searchVariants.push(
-      `software developer internship eligibility batch 2026 apply${locSuffix}`.trim()
+      `(site:lever.co OR site:greenhouse.io OR site:myworkdayjobs.com) ${techPrefix}intern ${year}${locSuffix}`.trim()
     );
 
     // 3. User query combined with explicit internship criteria
     searchVariants.push(
-      `${trimmed} internship stipend`.trim()
+      `${trimmed} internship stipend deadline`.trim()
     );
 
-    // 4. SDE Intern roles
+    // 4. SDE Intern roles on official career portals
     searchVariants.push(
-      `${techPrefix}software engineer intern careers apply 2026${locSuffix}`.trim()
+      `${techPrefix}software engineer intern careers apply ${year}${locSuffix}`.trim()
     );
 
     // Deduplicate and filter empty

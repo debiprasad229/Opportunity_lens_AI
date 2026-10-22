@@ -1,12 +1,19 @@
 import * as cheerio from 'cheerio';
 import { logger } from '../utils/logger.js';
 
+export interface VacancyLink {
+  title: string;
+  url: string;
+}
+
 export interface ExtractedContent {
   title: string;
   metaDescription?: string;
   cleanText: string;
   jsonLdJobs: any[];
   candidateApplyLinks: string[];
+  individualVacancyLinks: VacancyLink[];
+  isIndexPage: boolean;
   tablesText: string[];
   headings: string[];
 }
@@ -14,7 +21,8 @@ export interface ExtractedContent {
 export class HtmlExtractor {
   /**
    * Cleans raw HTML, extracts JSON-LD schemas, removes boilerplate,
-   * gathers tables/lists, and returns focused textual content for LLM analysis.
+   * detects individual vacancy links from index pages, gathers tables/lists,
+   * and returns focused textual content for LLM analysis.
    */
   public extract(html: string, pageUrl: string): ExtractedContent {
     if (!html || html.trim() === '') {
@@ -23,6 +31,8 @@ export class HtmlExtractor {
         cleanText: '',
         jsonLdJobs: [],
         candidateApplyLinks: [],
+        individualVacancyLinks: [],
+        isIndexPage: false,
         tablesText: [],
         headings: [],
       };
@@ -38,7 +48,7 @@ export class HtmlExtractor {
         if (text) {
           const parsed = JSON.parse(text);
           if (Array.isArray(parsed)) {
-            parsed.forEach(item => {
+            parsed.forEach((item) => {
               if (item['@type'] === 'JobPosting' || item['@type'] === 'Organization') {
                 jsonLdJobs.push(item);
               }
@@ -58,28 +68,55 @@ export class HtmlExtractor {
       }
     });
 
-    // 2. Extract Candidate Application Links before stripping anchors
+    // 2. Extract Candidate Application Links & Individual Vacancy Links
     const candidateApplyLinks: string[] = [];
-    const applyPatterns = /apply|submit|career|job|intern|workday|lever\.co|greenhouse\.io|smartrecruiters/i;
+    const individualVacancyLinks: VacancyLink[] = [];
+    const seenUrls = new Set<string>();
+
+    const directApplyRegex = /\b(apply|submit application|apply now|application form|apply online)\b/i;
+    const vacancyLinkRegex = /\/(?:jobs?|careers?|positions?|postings?|openings?)\/[a-zA-Z0-9\-_]{3,}/i;
+    const atsDomainRegex = /lever\.co|greenhouse\.io|myworkdayjobs\.com|smartrecruiters\.com|ashbyhq\.com/i;
+    const internRoleRegex = /\b(intern|internship|software|engineer|developer|trainee|apprentice|placement)\b/i;
 
     $('a').each((_, el) => {
       const href = $(el).attr('href');
-      const text = $(el).text().trim();
-      const idOrClass = `${$(el).attr('id') || ''} ${$(el).attr('class') || ''}`;
+      const text = $(el).text().trim().replace(/\s+/g, ' ');
+      const ariaLabel = $(el).attr('aria-label') || '';
+      const linkLabel = `${text} ${ariaLabel}`.trim();
 
-      if (href && (applyPatterns.test(href) || applyPatterns.test(text) || applyPatterns.test(idOrClass))) {
-        try {
-          const resolved = new URL(href, pageUrl).toString();
-          if (
-            resolved.startsWith('http') &&
-            !resolved.includes('javascript:') &&
-            !candidateApplyLinks.includes(resolved)
-          ) {
-            candidateApplyLinks.push(resolved);
-          }
-        } catch {
-          // Ignore invalid URL
+      if (!href) return;
+
+      try {
+        const resolved = new URL(href, pageUrl).toString();
+        if (
+          !resolved.startsWith('http') ||
+          resolved.includes('javascript:') ||
+          seenUrls.has(resolved)
+        ) {
+          return;
         }
+
+        // Direct Apply link on the current job
+        if (directApplyRegex.test(linkLabel) || directApplyRegex.test(href)) {
+          seenUrls.add(resolved);
+          candidateApplyLinks.push(resolved);
+        }
+
+        // Individual Vacancy link from an index or job-board page
+        const isVacancyUrl = vacancyLinkRegex.test(resolved) || atsDomainRegex.test(resolved);
+        const hasInternshipText = internRoleRegex.test(linkLabel) || internRoleRegex.test(resolved);
+
+        if (isVacancyUrl && hasInternshipText && resolved !== pageUrl) {
+          if (!seenUrls.has(resolved)) {
+            seenUrls.add(resolved);
+            individualVacancyLinks.push({
+              title: text || 'View Internship Vacancy',
+              url: resolved,
+            });
+          }
+        }
+      } catch {
+        // Ignore invalid URL
       }
     });
 
@@ -92,7 +129,7 @@ export class HtmlExtractor {
       }
     });
 
-    // 4. Extract Tables (often contain stipend, duration, eligibility tables)
+    // 4. Extract Tables (stipend tables, eligibility tables)
     const tablesText: string[] = [];
     $('table').each((_, table) => {
       const rows: string[] = [];
@@ -117,18 +154,25 @@ export class HtmlExtractor {
       $('meta[property="og:description"]').attr('content') ||
       '';
 
-    // 6. Strip Boilerplate (scripts, styles, navigation, footer, banners, ads)
+    // 6. Detect if current page is an Index / Multi-Job listing page
+    const titleLower = title.toLowerCase();
+    const isIndexPage =
+      individualVacancyLinks.length >= 2 ||
+      (/\b(careers|openings|job openings|search jobs|current opportunities|all jobs)\b/i.test(titleLower) &&
+        !/\b(software engineer|developer|intern)\b/i.test(titleLower));
+
+    // 7. Strip Boilerplate (scripts, styles, navigation, footer, banners, ads)
     $('script, style, noscript, svg, iframe, canvas, nav, footer, header, form, aside').remove();
     $('.cookie-banner, .cookie-consent, #cookie-banner, #onetrust-consent-sdk, .advertisement, .ad, .social-share').remove();
 
-    // 7. Get Main Content Area if available (main, article, #content, .content, .job-details)
-    let mainSelector = $('main, article, [role="main"], .job-details, .job-description, .posting-content, #content, .content');
-    let textTarget = mainSelector.length > 0 ? mainSelector : $('body');
+    // 8. Get Main Content Area if available
+    const mainSelector = $('main, article, [role="main"], .job-details, .job-description, .posting-content, #content, .content');
+    const textTarget = mainSelector.length > 0 ? mainSelector : $('body');
 
     // Clean whitespace and linebreaks
     let cleanText = textTarget.text().replace(/\s+/g, ' ').trim();
 
-    // Ensure title and meta description are included in cleanText so SPA/Workday pages have extractable context
+    // Ensure title and meta description are included in cleanText for rich context
     if (title || metaDescription) {
       cleanText = `${title}. ${metaDescription ? metaDescription + '. ' : ''}${cleanText}`.trim();
     }
@@ -139,7 +183,7 @@ export class HtmlExtractor {
       cleanText = cleanText.substring(0, maxChars) + '... [truncated]';
     }
 
-    logger.debug(`Extracted content from ${pageUrl}: title="${title}", length=${cleanText.length}`);
+    logger.debug(`Extracted content from ${pageUrl}: title="${title}", length=${cleanText.length}, vacancyLinks=${individualVacancyLinks.length}`);
 
     return {
       title,
@@ -147,6 +191,8 @@ export class HtmlExtractor {
       cleanText,
       jsonLdJobs,
       candidateApplyLinks: candidateApplyLinks.slice(0, 5),
+      individualVacancyLinks: individualVacancyLinks.slice(0, 5),
+      isIndexPage,
       tablesText: tablesText.slice(0, 3),
       headings: headings.slice(0, 8),
     };

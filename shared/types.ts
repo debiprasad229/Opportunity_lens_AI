@@ -7,6 +7,7 @@ export interface FieldEvidence {
   sourceUrl?: string;
   confidenceScore?: number; // 0.0 - 1.0
   notes?: string;
+  normalizedDate?: string; // Normalized date e.g. YYYY-MM-DD or 'rolling' / 'asap'
 }
 
 export interface InternshipOpportunity {

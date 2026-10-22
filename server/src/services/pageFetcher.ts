@@ -10,6 +10,7 @@ export interface FetchedPage {
   contentType: string;
   fetchDurationMs: number;
   success: boolean;
+  isRestricted?: boolean;
   error?: string;
 }
 
@@ -82,6 +83,38 @@ export class SafePageFetcher {
         }
 
         const contentType = response.headers.get('content-type') || '';
+
+        // Check for access controls / auth requirements (401 / 403)
+        if (response.status === 401 || response.status === 403) {
+          return {
+            url: targetUrl,
+            finalUrl: currentUrl,
+            html: '',
+            statusCode: response.status,
+            contentType,
+            fetchDurationMs: Date.now() - startTime,
+            success: false,
+            isRestricted: true,
+            error: `Access restricted (HTTP ${response.status}): Authentication or permission required. Respecting access controls.`,
+          };
+        }
+
+        // Check if redirect ended at a login/auth page
+        const lowerFinalUrl = currentUrl.toLowerCase();
+        if (lowerFinalUrl.includes('/login') || lowerFinalUrl.includes('/signin') || lowerFinalUrl.includes('/auth/')) {
+          return {
+            url: targetUrl,
+            finalUrl: currentUrl,
+            html: '',
+            statusCode: response.status,
+            contentType,
+            fetchDurationMs: Date.now() - startTime,
+            success: false,
+            isRestricted: true,
+            error: 'Access restricted: Redirected to login page. Respecting authentication barrier.',
+          };
+        }
+
         // Only accept HTML or text
         if (!contentType.includes('text/html') && !contentType.includes('application/xhtml+xml') && !contentType.includes('text/plain')) {
           throw new Error(`Unsupported content type: ${contentType}. Expected HTML.`);
@@ -91,6 +124,24 @@ export class SafePageFetcher {
         const html = await this.readBodyWithLimit(response, config.maxResponseSizeBytes);
         const duration = Date.now() - startTime;
 
+        // Check for CAPTCHA challenges or bot verification walls
+        const isCaptchaChallenge =
+          /cf-challenge|cf-browser-verification|g-recaptcha|hcaptcha|challenge-running|Attention Required! \| Cloudflare|robot check|distil_ident/i.test(html);
+
+        if (isCaptchaChallenge) {
+          return {
+            url: targetUrl,
+            finalUrl: currentUrl,
+            html: '',
+            statusCode: response.status,
+            contentType,
+            fetchDurationMs: duration,
+            success: false,
+            isRestricted: true,
+            error: 'Access restricted: CAPTCHA / bot challenge page detected. Respecting website restrictions.',
+          };
+        }
+
         return {
           url: targetUrl,
           finalUrl: currentUrl,
@@ -99,6 +150,7 @@ export class SafePageFetcher {
           contentType,
           fetchDurationMs: duration,
           success: response.ok,
+          isRestricted: false,
           error: response.ok ? undefined : `HTTP error ${response.status} ${response.statusText}`,
         };
       }

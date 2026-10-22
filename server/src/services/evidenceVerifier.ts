@@ -1,6 +1,11 @@
-import { FieldEvidence, InternshipOpportunity, VerificationStatus } from '../../../shared/types.js';
+import { FieldEvidence, InternshipOpportunity } from '../../../shared/types.js';
 import { ExtractedContent } from './htmlExtractor.js';
+import { normalizeDateString } from './geminiAdapter.js';
 import { logger } from '../utils/logger.js';
+
+function normalizeWhitespace(str: string): string {
+  return str.toLowerCase().replace(/\s+/g, ' ').trim();
+}
 
 export class EvidenceVerifier {
   /**
@@ -10,24 +15,30 @@ export class EvidenceVerifier {
   public verify(opportunity: InternshipOpportunity, pageContent: ExtractedContent): InternshipOpportunity {
     logger.debug(`Verifying evidence for opportunity: ${opportunity.companyName.value} at ${opportunity.sourceUrl}`);
 
-    const cleanText = pageContent.cleanText.toLowerCase();
+    const cleanTextNormalized = normalizeWhitespace(pageContent.cleanText);
 
-    // Verify each field
-    opportunity.companyName = this.verifyField(opportunity.companyName, cleanText);
-    opportunity.roleTitle = this.verifyField(opportunity.roleTitle, cleanText);
-    opportunity.eligibility = this.verifyField(opportunity.eligibility, cleanText);
-    opportunity.stipend = this.verifyField(opportunity.stipend, cleanText);
-    opportunity.deadline = this.verifyField(opportunity.deadline, cleanText);
+    // Verify each individual field
+    opportunity.companyName = this.verifyField(opportunity.companyName, cleanTextNormalized);
+    opportunity.roleTitle = this.verifyField(opportunity.roleTitle, cleanTextNormalized);
+    opportunity.eligibility = this.verifyField(opportunity.eligibility, cleanTextNormalized);
+    opportunity.stipend = this.verifyField(opportunity.stipend, cleanTextNormalized);
+    opportunity.deadline = this.verifyDeadlineField(opportunity.deadline, cleanTextNormalized);
     opportunity.officialApplicationLink = this.verifyLinkField(
       opportunity.officialApplicationLink,
       pageContent.candidateApplyLinks,
       opportunity.sourceUrl
     );
 
+    // Conflicting status detection: if page contains explicit closed flags
+    const pageLower = cleanTextNormalized;
+    if (/\b(this position has been filled|no longer accepting applications|job is closed|application expired)\b/i.test(pageLower)) {
+      opportunity.isStaleOrClosed = true;
+    }
+
     return opportunity;
   }
 
-  private verifyField(field: FieldEvidence, pageTextLower: string): FieldEvidence {
+  private verifyField(field: FieldEvidence, pageTextNormalized: string): FieldEvidence {
     // 1. If value is missing or null, it's explicitly UNKNOWN
     if (!field.value || field.value.trim() === '') {
       return {
@@ -38,13 +49,13 @@ export class EvidenceVerifier {
       };
     }
 
-    const valueLower = field.value.toLowerCase().trim();
-    const quoteLower = field.sourceText ? field.sourceText.toLowerCase().trim() : '';
+    const valueNormalized = normalizeWhitespace(field.value);
+    const quoteNormalized = field.sourceText ? normalizeWhitespace(field.sourceText) : '';
 
     // 2. If supporting quote is provided, verify it against the source text
-    if (quoteLower) {
-      const quoteInPage = pageTextLower.includes(quoteLower);
-      const valInQuote = quoteLower.includes(valueLower);
+    if (quoteNormalized) {
+      const quoteInPage = pageTextNormalized.includes(quoteNormalized);
+      const valInQuote = quoteNormalized.includes(valueNormalized);
 
       if (quoteInPage && valInQuote) {
         return {
@@ -67,7 +78,7 @@ export class EvidenceVerifier {
 
       if (!quoteInPage) {
         // Quote was not found verbatim. Check if the value itself exists in page
-        if (pageTextLower.includes(valueLower)) {
+        if (pageTextNormalized.includes(valueNormalized)) {
           return {
             ...field,
             status: 'partial',
@@ -78,15 +89,15 @@ export class EvidenceVerifier {
           return {
             ...field,
             status: 'unverified',
-            confidenceScore: 0.3,
-            notes: 'Neither value nor source quote could be verified in page text.',
+            confidenceScore: 0.25,
+            notes: 'Neither value nor source quote could be verified verbatim in page text.',
           };
         }
       }
     }
 
     // 3. No quote provided: test if value appears directly in text
-    if (pageTextLower.includes(valueLower)) {
+    if (pageTextNormalized.includes(valueNormalized)) {
       return {
         ...field,
         status: 'partial',
@@ -103,6 +114,21 @@ export class EvidenceVerifier {
     };
   }
 
+  private verifyDeadlineField(field: FieldEvidence, pageTextNormalized: string): FieldEvidence {
+    const verified = this.verifyField(field, pageTextNormalized);
+
+    // Preserve original wording, and ensure normalizedDate is carefully set
+    let normalizedDate = field.normalizedDate;
+    if (!normalizedDate && verified.value) {
+      normalizedDate = normalizeDateString(verified.value);
+    }
+
+    return {
+      ...verified,
+      normalizedDate,
+    };
+  }
+
   private verifyLinkField(
     field: FieldEvidence,
     candidateLinks: string[],
@@ -114,7 +140,7 @@ export class EvidenceVerifier {
         status: 'partial',
         confidenceScore: 0.5,
         sourceUrl,
-        notes: 'Direct link not provided; defaulted to source page URL.',
+        notes: 'Direct application link not provided; defaulted to source page URL.',
       };
     }
 
@@ -131,7 +157,7 @@ export class EvidenceVerifier {
       }
 
       // Check if candidate links match
-      const matchesCandidate = candidateLinks.some(link => link.toLowerCase() === field.value!.toLowerCase());
+      const matchesCandidate = candidateLinks.some((link) => link.toLowerCase() === field.value!.toLowerCase());
 
       return {
         ...field,

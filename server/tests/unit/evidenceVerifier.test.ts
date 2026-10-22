@@ -9,6 +9,8 @@ describe('EvidenceVerifier', () => {
     cleanText: 'Stripe is looking for a Frontend Intern in Dublin. The monthly stipend is €3,500. Deadline to apply is December 15, 2025. Requirements: B.S. in Computer Science graduating in 2026.',
     jsonLdJobs: [],
     candidateApplyLinks: ['https://stripe.com/jobs/apply'],
+    individualVacancyLinks: [],
+    isIndexPage: false,
     tablesText: [],
     headings: ['Frontend Intern - Stripe'],
   };
