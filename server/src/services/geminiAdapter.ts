@@ -347,7 +347,7 @@ Return a JSON object conforming STRICTLY to this JSON structure:
     // Heuristic 3: Stipend
     let stipendVal: string | null = null;
     let stipendQuote: string | null = null;
-    const stipendMatch = text.match(/(?:stipend|salary|pay|compensation)[\s:]*([$₹€£][\d,]+(?:\s*-\s*[$₹€£]?[\d,]+)?(?:\s*(?:per|\/)\s*(?:month|hr|year|week|mo))?)/i);
+    const stipendMatch = text.match(/(?:stipend|salary|pay|compensation)[\s:]*([$₹€£][\d,]+(?:\s*-\s*[$₹€£]?[\d,]+)?(?:\s*(?:per|\/)\s*(?:month|hr|hour|year|week|mo))?)/i);
     if (stipendMatch) {
       stipendVal = stipendMatch[1];
       stipendQuote = stipendMatch[0];
@@ -371,13 +371,19 @@ Return a JSON object conforming STRICTLY to this JSON structure:
     // Heuristic 5: Deadline (preserve original wording and normalize date)
     let deadlineVal: string | null = null;
     let deadlineQuote: string | null = null;
-    const deadlineMatch = text.match(/(?:deadline|last date|apply before|closing date)[\s:]*([A-Za-z0-9,\s]{6,30})/i);
-    if (deadlineMatch) {
-      deadlineVal = deadlineMatch[1].trim();
-      deadlineQuote = deadlineMatch[0];
-    } else if (/\b(rolling basis|open until filled)\b/i.test(text)) {
+    const dateMatch = text.match(/(?:deadline|last date|apply before|closing date)[\s:]+([A-Za-z]+ \d{1,2},? \d{4}|\d{4}-\d{2}-\d{2}|\d{1,2}[/-]\d{1,2}[/-]\d{2,4})/i);
+    if (dateMatch) {
+      deadlineVal = dateMatch[1].trim();
+      deadlineQuote = dateMatch[0];
+    } else if (/\b(rolling basis|open until filled|accepted on a rolling basis)\b/i.test(text)) {
       deadlineVal = 'Rolling basis';
-      deadlineQuote = 'Rolling basis';
+      deadlineQuote = 'rolling basis';
+    } else {
+      const genericMatch = text.match(/(?:deadline|last date|apply before|closing date):\s*([A-Za-z0-9,\s]{6,30})/i);
+      if (genericMatch) {
+        deadlineVal = genericMatch[1].replace(/\.$/, '').trim();
+        deadlineQuote = genericMatch[0];
+      }
     }
 
     // Application Link
